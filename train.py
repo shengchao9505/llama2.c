@@ -29,7 +29,8 @@ from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from tinystories import Task
-from export import model_export
+#from export import model_export
+import transformers
 
 # -----------------------------------------------------------------------------
 # I/O
@@ -144,21 +145,13 @@ iter_num = 0
 best_val_loss = 1e9
 
 # model init
-model_args = dict(
-    dim=dim,
-    n_layers=n_layers,
-    n_heads=n_heads,
-    n_kv_heads=n_kv_heads,
-    vocab_size=vocab_size,
-    multiple_of=multiple_of,
-    max_seq_len=max_seq_len,
-    dropout=dropout,
-)  # start with model_args from command line
+model_args = transformers.LlamaConfig(...)
+
 if init_from == "scratch":
     # init a new model from scratch
     print("Initializing a new model from scratch")
-    gptconf = ModelArgs(**model_args)
-    model = Transformer(gptconf)
+    model = transformers.BertForMaskedLM(model_args)
+    
 elif init_from == "resume":
     print(f"Resuming training from {out_dir}")
     # resume training from a checkpoint.
@@ -216,10 +209,11 @@ def estimate_loss():
         batch_iter = iter_batches(split=split)
         losses = torch.zeros(eval_iters)  # keep on CPU
         for k in range(eval_iters):
-            X, Y = next(batch_iter)
+            inputs = next(batch_iter)
             with ctx:
-                logits = model(X, Y)
-                loss = raw_model.last_loss
+                outputs = model(**inputs)
+                logits = outputs.logits
+                loss = outputs.loss
             losses[k] = loss.item()
         out[split] = losses.mean()
     model.train()
@@ -246,7 +240,7 @@ if wandb_log and master_process:
 
 # training loop
 train_batch_iter = iter_batches(split="train")
-X, Y = next(train_batch_iter)  # fetch the very first batch
+inputs = next(train_batch_iter)  # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0  # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model  # unwrap DDP container if needed
@@ -302,11 +296,11 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = micro_step == gradient_accumulation_steps - 1
         with ctx:
-            logits = model(X, Y)
+            logits = model(**inputs)
             loss = raw_model.last_loss
             loss = loss / gradient_accumulation_steps
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y = next(train_batch_iter)
+        inputs = next(train_batch_iter)
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
     # clip the gradient
