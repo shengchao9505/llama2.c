@@ -56,9 +56,10 @@ class PretokDataset(torch.utils.data.IterableDataset):
                     end = start + self.max_seq_len + 1
                     # calling .astype will copy the data into a new numpy array, now in RAM
                     chunk = torch.from_numpy((m[start:end]).astype(np.int64))
-                    x = chunk[:-1]
-                    y = chunk[1:]
-                    yield x, y
+                    #x = chunk[:-1]
+                    #y = chunk[1:]
+                    #yield x, y
+                    yield chunk # input_ids
 
 class Task:
 
@@ -66,9 +67,9 @@ class Task:
     def iter_batches(batch_size, device, num_workers=0, **dataset_kwargs):
         ds = PretokDataset(**dataset_kwargs)
         dl = torch.utils.data.DataLoader(
-            ds, batch_size=batch_size, pin_memory=True, num_workers=num_workers
+            ds, batch_size=batch_size, pin_memory=True, num_workers=num_workers, collate_fn=...
         )
-        for x, y in dl:
-            x = x.to(device, non_blocking=True)
-            y = y.to(device, non_blocking=True)
-            yield x, y
+        for batch in dl:
+            for k, v in batch.items():batch[k] = v.to(device, non_blocking=True)
+            yield batch
+            
